@@ -497,12 +497,6 @@
     </div>
 
     </div><!-- end left-panel-scroll -->
-    <div class="left-panel-footer">
-    <button class="translate-btn" id="translate-btn" onclick="startTranslation()">
-      <div class="spinner" id="spinner"></div>
-      <span id="btn-text">🌏 แปลเป็นภาษาไทย</span>
-    </button>
-    </div>
   </div>
 
   <!-- RIGHT -->
@@ -511,6 +505,10 @@
       <h2>ผลการแปล</h2>
       <span class="stats" id="stats-text"></span>
       <div class="output-actions">
+        <button class="translate-btn" id="translate-btn" onclick="startTranslation()">
+          <div class="spinner" id="spinner"></div>
+          <span id="btn-text">🌏 แปลเป็นภาษาไทย</span>
+        </button>
         <button class="action-btn" id="copy-btn" onclick="copyResult()" disabled>📋 คัดลอกทั้งหมด</button>
         <button class="action-btn" id="download-btn" onclick="downloadResult()" disabled>⬇️ ดาวน์โหลด</button>
       </div>
