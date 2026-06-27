@@ -79,7 +79,19 @@
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+  }
+
+  .left-panel-scroll {
+    flex: 1;
     overflow-y: auto;
+  }
+
+  .left-panel-footer {
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    padding: 12px 0 4px;
+    flex-shrink: 0;
   }
 
   .section-label {
@@ -420,12 +432,18 @@
 <main>
   <!-- LEFT -->
   <div class="left-panel">
+  <div class="left-panel-scroll">
     <div class="section-label">ประเภทไฟล์</div>
     <div class="mode-tabs">
       <button class="tab-btn active" onclick="setMode('renpy')" id="tab-renpy">
         <span class="tab-icon">📜</span>
         <span>Ren'Py</span>
         <span style="font-size:9px;opacity:0.6">.rpy</span>
+      </button>
+      <button class="tab-btn" onclick="setMode('unity')" id="tab-unity">
+        <span class="tab-icon">🎮</span>
+        <span>Unity</span>
+        <span style="font-size:9px;opacity:0.6">.csv/.json</span>
       </button>
       <button class="tab-btn" onclick="setMode('mrpg')" id="tab-mrpg">
         <span class="tab-icon">⚔️</span>
@@ -478,10 +496,13 @@
       </div>
     </div>
 
+    </div><!-- end left-panel-scroll -->
+    <div class="left-panel-footer">
     <button class="translate-btn" id="translate-btn" onclick="startTranslation()">
       <div class="spinner" id="spinner"></div>
       <span id="btn-text">🌏 แปลเป็นภาษาไทย</span>
     </button>
+    </div>
   </div>
 
   <!-- RIGHT -->
@@ -536,6 +557,9 @@ function setMode(mode) {
     if (mode === 'renpy') {
       hint.textContent = '.rpy, .rpyc, .txt';
       fileInput.accept = '.rpy,.rpyc,.txt';
+    } else if (mode === 'unity') {
+      hint.textContent = '.csv, .json (Unity Localization)';
+      fileInput.accept = '.csv,.json';
     } else {
       hint.textContent = '.json, .csv, .txt';
       fileInput.accept = '.json,.csv,.txt';
@@ -604,7 +628,93 @@ function parseRenPy(text) {
   return segments;
 }
 
-// Parse MRPG JSON
+// Parse Unity Localization CSV
+// Format: Key,English,Thai(or empty)  OR  Key,Source,Translation
+function parseUnityCSV(text) {
+  const lines = text.split('\n');
+  if (lines.length === 0) return [];
+  const segments = [];
+  // detect header
+  const header = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
+  const keyIdx = header.findIndex(h => h === 'key' || h === 'id' || h === 'name');
+  // find english/source column
+  const srcIdx = header.findIndex(h => h.includes('english') || h.includes('source') || h.includes('en') || h === 'value');
+  const useKeyIdx = keyIdx >= 0 ? keyIdx : 0;
+  const useSrcIdx = srcIdx >= 0 ? srcIdx : (useKeyIdx === 0 ? 1 : 0);
+
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    // simple CSV split (handles basic quoted fields)
+    const cols = line.match(/("(?:[^"]|"")*"|[^,]*)/g)
+      .map(c => c.trim().replace(/^"|"$/g, '').replace(/""/g, '"'));
+    const key = cols[useKeyIdx] || '';
+    const src = cols[useSrcIdx] || '';
+    if (src && src.length > 1 && !/^[0-9]+$/.test(src)) {
+      segments.push({ lineNum: key || i, speaker: key || null, text: src, raw: line, colIndex: useSrcIdx, cols });
+    }
+  }
+  return segments;
+}
+
+// Parse Unity Localization JSON
+// Handles: {"entries":[{"key":"..","value":".."}]} or flat {"key":"value"}
+function parseUnityJSON(text) {
+  try {
+    const data = JSON.parse(text);
+    const segments = [];
+    // try entries array (Unity Localization package format)
+    const entries = data.entries || data.m_Entries || data.keys || null;
+    if (Array.isArray(entries)) {
+      entries.forEach((e, i) => {
+        const key = e.key || e.m_Key || e.id || i;
+        const val = e.value || e.m_LocalizedValue || e.source || e.english || '';
+        if (val && val.length > 1) segments.push({ lineNum: key, speaker: String(key), text: val, raw: JSON.stringify(e) });
+      });
+    } else {
+      // flat object
+      const walk = (obj, path) => {
+        if (typeof obj === 'string' && obj.length > 2 && !/^[0-9a-f-]{8,}$/.test(obj)) {
+          segments.push({ lineNum: path, speaker: path.split('.').pop(), text: obj, raw: obj });
+        } else if (typeof obj === 'object' && obj !== null && !Array.isArray(obj)) {
+          Object.entries(obj).forEach(([k, v]) => walk(v, path ? path + '.' + k : k));
+        }
+      };
+      walk(data, '');
+    }
+    return segments.slice(0, 50);
+  } catch {
+    return parseTextLines(text);
+  }
+}
+
+// Rebuild Unity CSV with translations inserted
+function rebuildUnityCSV(originalText, toTranslate, translations, thaiColHeader) {
+  const lines = originalText.split('\n');
+  const header = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
+  // find or append thai column
+  let thaiIdx = header.findIndex(h => h.includes('thai') || h.includes('th') || h === 'translation');
+
+  const outputLines = [lines[0] + (thaiIdx < 0 ? ',Thai' : '')];
+  thaiIdx = thaiIdx >= 0 ? thaiIdx : header.length;
+
+  // map key -> thai
+  const thaiMap = {};
+  toTranslate.forEach((seg, i) => { thaiMap[String(seg.lineNum)] = translations[i]?.thai || ''; });
+
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) { outputLines.push(''); continue; }
+    const cols = line.match(/("(?:[^"]|"")*"|[^,]*)/g)
+      .map(c => c.trim().replace(/^"|"$/g, '').replace(/""/g, '"'));
+    const key = cols[toTranslate[0]?.cols ? 0 : 0] || '';
+    const thai = thaiMap[key] || thaiMap[String(i)] || '';
+    if (thaiIdx >= cols.length) cols.push(thai);
+    else cols[thaiIdx] = thai;
+    outputLines.push(cols.map(c => c.includes(',') || c.includes('"') ? `"${c.replace(/"/g,'""')}"` : c).join(','));
+  }
+  return outputLines.join('\n');
+}
 function parseMRPG(text) {
   try {
     const data = JSON.parse(text);
